@@ -1,0 +1,109 @@
+library(data.table)
+
+exc_deaths <- fread((normalizePath("./raw_data/excess.csv")))
+wk_deaths <- fread((normalizePath("./outputs/EW_Weekly_Deaths_2010-2020.csv")))
+pop <- fread((normalizePath("./raw_data/LA_Lower_to_Upper_to_ONS_Code_Lookup_2019_fix.csv")))
+# table(is.na(pop$Pop_Est_Total), pop$Year)
+
+exc_deaths <- merge(exc_deaths, pop[, c("LTLA18CD", "Pop_Est_Total")], by.x = "area_code", by.y = "LTLA18CD", all.x = T)
+
+exc_deaths$excess_abs <- round(exc_deaths$excess * exc_deaths$Pop_Est_Total / 100000, 0)
+
+exc_deaths$excess_ratio <- round(exc_deaths$excess, 1)
+
+exc_deaths <- exc_deaths[, -3]
+
+write.csv(exc_deaths, "./outputs/excess_deaths_la.csv", row.names = F)
+
+
+
+####
+
+dth_all <- fread("./raw_data/excess_all_aprils.csv") 
+dth_all$month <- month.abb[dth_all$month]
+dth_all <- dth_all[dth_all$month == "Apr", ]
+dth_all <- dth_all[, c(1,5,9)]
+
+write.csv(dth_all, "./outputs/all_april_deaths_only.csv", row.names = F)
+
+###
+
+library(ggplot2)
+library(scales)
+library(Cairo)
+CairoWin() # for antializing
+
+
+gg_color_hue <- function(n) {
+  hues = seq(15, 375, length = n + 1)
+  hcl(h = hues, l = 65, c = 100)[1:n]
+}
+
+mcolours <- gg_color_hue(3)
+mcolours <- mcolours[c(3,1,2)]
+
+dth_all_las <- fread("./raw_data/excess_all_aprils.csv") 
+dth_all_las$month <- month.abb[dth_all_las$month]
+dth_all_las <- dth_all_las[dth_all_las$month == "Apr", ]
+dth_all_las$projected <- dth_all_las$rate - dth_all_las$excess_rate
+dth_all_las$area_code <- factor(dth_all_las$area_code)
+
+for(i in 1:316) {
+  dth_all <- dth_all_las[dth_all_las$area_code == levels(dth_all_las$area_code)[i],]  
+  
+  dth_all$`Mortality Rate` <- "Recorded"
+  
+  temp1 <- dth_all[dth_all$year>=2019, ]
+  temp1$`Mortality Rate` <- "Projected with COVID19"
+  
+  temp2 <- dth_all[dth_all$year>=2019, ]
+  temp2$`Mortality Rate` <- "Projected w/o COVID19"
+  temp2$rate[temp2$year == 2020] <- temp2$projected[temp2$year == 2020]
+  
+  dth_all <- dth_all[dth_all$year != 2020, ]
+  dth_all <- rbind(dth_all, temp1, temp2)
+  
+  
+  dth_all$`Mortality Rate` <- factor(dth_all$`Mortality Rate`, levels = c("Recorded", "Projected with COVID19", "Projected w/o COVID19"))
+  # dth_all$year <- as.Date(paste0(dth_all$year, "-04-01"), "%Y-%m-%d")
+  # scale_x_date(labels = date_format("%m-%Y"))
+  
+  
+  file_plot <- ggplot(dth_all, aes(year, rate, colour=`Mortality Rate`, linetype = `Mortality Rate`)) + #
+    geom_line(size = 0.7) + geom_point() +
+    theme_light() +
+    scale_x_continuous(breaks = (2010:2020), labels = paste0("Apr ", 2010:2020)) + 
+    scale_color_manual(values = mcolours) +
+    ylim(c(0,300)) + 
+    theme(axis.text.x = element_text(angle = 45, vjust = 0.5), 
+          legend.position="bottom", legend.direction = "vertical", legend.margin=margin(),
+          text = element_text(size=9)) +  
+    labs(x = "", y = "Mortality rate per 100,000")
+
+  ggsave(plot = file_plot, paste0("./excess_deaths_plots/", levels(dth_all_las$area_code)[i], ".png"), 
+         width = 3, height = 5,
+         scale = 0.8, 
+         dpi = 100, 
+         type = "cairo-png")
+  
+  
+}
+
+# dth_all_las$Link <- dth_all_las$area_code, ".png"
+write.csv(dth_all, "./outputs/all_april_deaths_only.csv", row.names = F)
+
+
+###
+
+
+library(sf)
+la_sf <- st_read("./raw_data/shapefiles/eng_lad_2019_wgs84.shp")
+la_sf <- st_centroid(la_sf)
+la_sf <- merge(la_sf, dth_all, by.x = "lad19cd", by.y = "area_code", all.y = TRUE)
+la_sf <- la_sf[, c("lad19cd", "rate", "year")]
+
+st_write(la_sf, "all_april_deaths_by_LA.shp", driver="ESRI Shapefile")  # create to a shapefile 
+
+
+
+
